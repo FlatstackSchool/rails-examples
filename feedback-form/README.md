@@ -19,7 +19,9 @@ class FeedbacksController < ApplicationController
     params.fetch(:feedback, {}).permit(:email, :name, :message, :phone)
   end
 end
+```
 
+```ruby
 # app/models/feedback.rb
 class Feedback
   include ActiveModel::Model
@@ -33,7 +35,9 @@ class Feedback
     valid?
   end
 end
+```
 
+```ruby
 # app/views/feedbacks/new.html.erb
 - title("Contact Us")
 - description("Contact the team")
@@ -60,7 +64,9 @@ end
 
       .form-actions
         = f.button :submit, "Submit"
+```
 
+```ruby
 # .env.example
 # We send all feedback email to this address
 FEEDBACK_EMAIL=test@example.com
@@ -72,20 +78,25 @@ class ApplicationMailer < ActionMailer::Base
     mail(subject: "Feedback", from: feedback.email, to: ENV.fetch("FEEDBACK_EMAIL"))
   end
 end
+```
 
+```ruby
 # app/views/application_mailer/feedback.html.erb
 p
   | Hello, here is feedback from #{@feedback.name} (#{@feedback.email} #{@feedback.phone})
 
 blockquote
   = @feedback.message
+```
 
-
+```ruby
 # app/views/application_mailer/feedback.text.erb
 Hello, here is feedback from <%= @feedback.name %> (<%= @feedback.email %> <%= @feedback.phone %>)
 
 <%= @feedback.message %>
+```
 
+```ruby
 # config/locales/flash.en.yml
 en:
   flash:
@@ -103,12 +114,16 @@ en:
     feedbacks:
         create:
           notice: "Email was successfully sent."
+```
 
+```ruby
 # config/routes.rb
 Rails.application.routes.draw do
   resource :feedback, only: %i(new create)
 end
+```
 
+```ruby
 # spec/factories/feedbacks.rb
 FactoryGirl.define do
   factory :feedback do
@@ -118,7 +133,9 @@ FactoryGirl.define do
     phone { Faker::PhoneNumber.phone_number }
   end
 end
+```
 
+```ruby
 # spec/features/visitor/create_feedback_spec.rb
 require "rails_helper"
 
