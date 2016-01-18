@@ -47,8 +47,7 @@ class Markdown
   ]
 
   CONTEXT = {
-    gfm: true,
-    asset_root: ENV.fetch("EMOJI_ASSET_ROOT")
+    gfm: true
   }
 
   attr_reader :source, :pipeline
