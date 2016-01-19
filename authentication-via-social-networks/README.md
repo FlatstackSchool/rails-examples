@@ -1,9 +1,14 @@
 # Authentication via Social Networks
 
+Omniauth schema:
+![alt text](omniauth-schema.png "Omniauth schema")
+
 ```ruby
 # Gemfile
+...
 gem "omniauth-facebook"
 gem "omniauth-google-oauth2"
+...
 ```
 
 ```ruby
@@ -512,7 +517,6 @@ end
 trait :from_auth_hashie do
   email "joe@bloggs.com"
 end
-...
 ```
 
 ```ruby
