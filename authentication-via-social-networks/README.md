@@ -342,7 +342,7 @@ end
 ```ruby
 # app/models/social_profile.rb
 class SocialProfile < ActiveRecord::Base
-  PROVIDERS = %i(facebook google_oauth2)
+  PROVIDERS = OmniAuth.strategies.map { |s| s.to_s.demodulize.underscore }.last(2)
 
   belongs_to :user
 
