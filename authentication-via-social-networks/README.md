@@ -342,7 +342,7 @@ end
 ```ruby
 # app/models/social_profile.rb
 class SocialProfile < ActiveRecord::Base
-  PROVIDERS = OmniAuth.strategies.map { |s| s.to_s.demodulize.underscore }.last(2)
+  PROVIDERS = OmniAuth.strategies.map { |s| s.to_s.demodulize.underscore }.drop(1)
 
   belongs_to :user
 
@@ -1133,3 +1133,23 @@ shared_examples_for "success sign in" do
   end
 end
 ```
+
+---
+
+## To add new provider you have to do:
+- Add new provider related omniauth gem into `Gemfile`
+- Add new provider into `config/initializers/devise.rb` with specific params and `ENV` vars, e.g.:
+```ruby
+...
+config.omniauth :new_awesome_provider, ENV["NEW_PROVIDER_ID"], ENV["NEW_PROVIDER_SECRET"], {}
+...
+```
+- Add new provider verification rule into `app/policies/auth_verification_policy.rb`, e.g.:
+```ruby
+...
+def new_example_provider
+  auth.extra.example_attribute.verified?
+end
+...
+```
+- Extend `config/locales/models/social_profile.en.yml` with new provider name
