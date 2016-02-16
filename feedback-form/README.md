@@ -9,14 +9,23 @@ class FeedbacksController < ApplicationController
   end
 
   def create
-    ApplicationMailer.feedback(feedback).deliver_now! if feedback.save
+    FeedbackNotifier.call(feedback: feedback) if feedback.valid?
     respond_with(feedback, location: root_path)
   end
 
   private
 
   def feedback_attributes
-    params.fetch(:feedback, {}).permit(:email, :name, :message, :phone)
+    params.fetch(:feedback, user_attributes).permit(:email, :name, :message, :phone)
+  end
+
+  def user_attributes
+    return {} unless current_user
+
+    {
+      email: current_user.email,
+      name: current_user.full_name
+    }
   end
 end
 ```
@@ -30,15 +39,11 @@ class Feedback
 
   validates :email, :name, :message, presence: true
   validates :email, format: Devise.email_regexp
-
-  def save
-    valid?
-  end
 end
 ```
 
 ```ruby
-# app/views/feedbacks/new.html.erb
+# app/views/feedbacks/new.html.slim
 - title("Contact Us")
 - description("Contact the team")
 - keywords("Contact, Email, Touch, Getting in touch")
@@ -71,6 +76,13 @@ end
 # We send all feedback email to this address
 FEEDBACK_EMAIL=test@example.com
 
+# HipChat notification options
+HIPCHAT_ROOM_NAME=room_name
+HIPCHAT_API_TOKEN=api_token
+HIPCHAT_API_VERSION=v2
+```
+
+```ruby
 # app/mailers/application_mailer.rb
 class ApplicationMailer < ActionMailer::Base
   def feedback(feedback)
@@ -81,7 +93,7 @@ end
 ```
 
 ```ruby
-# app/views/application_mailer/feedback.html.erb
+# app/views/application_mailer/feedback.html.slim
 p
   | Hello, here is feedback from #{@feedback.name} (#{@feedback.email} #{@feedback.phone})
 
@@ -94,6 +106,70 @@ blockquote
 Hello, here is feedback from <%= @feedback.name %> (<%= @feedback.email %> <%= @feedback.phone %>)
 
 <%= @feedback.message %>
+```
+
+```ruby
+# app/interactors/feedback_notifier.rb
+class FeedbackNotifier
+  include Interactor
+
+  delegate :feedback, to: :context
+
+  def call
+    ApplicationMailer.feedback(feedback).deliver_now!
+    FeedbackHipchatNotifier.call(feedback: feedback)
+  end
+end
+```
+
+```ruby
+# app/interactors/feedback_hipchat_notifier.rb
+class FeedbackHipchatNotifier
+  include Interactor
+
+  delegate :feedback, to: :context
+
+  def call
+    begin
+      room.send(from, message)
+    rescue => e
+      context.fail!(message: e.message)
+    end
+  end
+
+  private
+
+  def client
+    @_client ||= HipChat::Client.new(
+      ENV["HIPCHAT_API_TOKEN"],
+      client_options
+    )
+  end
+
+  def client_options
+    {
+      api_version: ENV["HIPCHAT_API_VERSION"],
+      server_url: ENV["HIPCHAT_SERVER_URL"],
+      http_proxy: ENV["HIPCHAT_HTTP_PROXY"]
+    }.compact
+  end
+
+  def room
+    client[ENV.fetch("HIPCHAT_ROOM_NAME")]
+  end
+
+  def from
+    feedback.name[0..14]
+  end
+
+  def message
+    [
+      "From: #{feedback.name} (#{feedback.email})",
+      "Message: #{feedback.message}",
+      "Phone: #{feedback.phone}"
+    ].join("<br />")
+  end
+end
 ```
 
 ```ruby
@@ -112,8 +188,8 @@ en:
         alert: '%{resource_name} could not be destroyed.'
 
     feedbacks:
-        create:
-          notice: "Email was successfully sent."
+      create:
+        notice: "Feedback was successfully sent."
 ```
 
 ```ruby
@@ -121,6 +197,11 @@ en:
 Rails.application.routes.draw do
   resource :feedback, only: %i(new create)
 end
+```
+
+```ruby
+# Gemfile
+gem "hipchat"
 ```
 
 ```ruby
@@ -148,7 +229,7 @@ feature "Create Feedback." do
     fill_form :feedback, feedback_attributes
     click_button "Submit"
 
-    open_email(ENV.fetch("FEADBACK_EMAIL"))
+    open_email(ENV.fetch("FEEDBACK_EMAIL"))
 
     expect(current_email).to have_subject("Feedback")
     expect(current_email).to be_delivered_from(feedback_attributes[:email])
