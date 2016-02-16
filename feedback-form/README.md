@@ -9,7 +9,7 @@ class FeedbacksController < ApplicationController
   end
 
   def create
-    ApplicationMailer.feedback(feedback).deliver_now! if feedback.save
+    dispatch_feedback if feedback.save
     respond_with(feedback, location: root_path)
   end
 
@@ -17,6 +17,11 @@ class FeedbacksController < ApplicationController
 
   def feedback_attributes
     params.fetch(:feedback, {}).permit(:email, :name, :message, :phone)
+  end
+
+  def dispatch_feedback
+    ApplicationMailer.feedback(feedback).deliver_now!
+    NotifyHipchat.new(feedback).call
   end
 end
 ```
@@ -159,6 +164,57 @@ feature "Create Feedback." do
     expect(current_email).to have_body_text(feedback_attributes[:message])
 
     expect(page).to have_content("Email was successfully sent.")
+  end
+end
+```
+
+```ruby
+gem "hipchat"
+```
+
+```ruby
+# app/interactors/notify_hipchat.rb
+
+class NotifyHipchat
+  attr_reader :feedback
+  private :feedback
+
+  ROOM = ENV["HIPCHAT_ROOM"]
+  TOKEN = ENV["HIPCHAT_TOKEN"]
+
+  def initialize(feedback)
+    @feedback = feedback
+  end
+
+  def call
+    client[ROOM].send(feedback.name, feedback.message)
+  end
+
+  private
+
+  def client
+    HipChat::Client.new(TOKEN)
+  end
+end
+```
+
+```ruby
+# spec/interactors/notify_hipchat.rb
+
+require "rails_helper"
+
+describe NotifyHipchat do
+  let(:feedback) { build(:feedback) }
+  let(:service) { described_class.new(feedback) }
+
+  before do
+    stub_const("NotifyHipchat::TOKEN", "123456abc")
+    stub_const("NotifyHipchat::ROOM", "1111")
+  end
+
+  it "sends notification to Hipchat" do
+    expect(HipChat::Client).to receive_message_chain(:new, :[], :send)
+    service.call
   end
 end
 ```
