@@ -274,15 +274,7 @@ end
 require "rails_helper"
 
 describe HipchatInteractor::Organizer do
-  let(:params) do
-    {
-      email: "makcimka1994@gmail.com",
-      name: "Max L",
-      message: "1337",
-      phone: "+79991560391"
-    }
-  end
-
+  let(:params) { FactoryGirl.attributes_for(:feedback) }
   let(:call) { described_class.call(params) }
 
   before do
