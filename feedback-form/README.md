@@ -3,9 +3,7 @@
 ```ruby
 # app/controllers/feedbacks_controller.rb
 class FeedbacksController < ApplicationController
-  expose_decorated(:feedback) do
-    Feedback.new(feedback_attributes)
-  end
+  expose(:feedback) { Feedback.new(feedback_attributes) }
 
   def new
   end
@@ -54,12 +52,8 @@ class DeliveryNotifications
   include Interactor
 
   def call
-    if context
-      send_email
-      send_hipchat
-    else
-      context.fail!(message: "Delivery Failed!")
-    end
+    send_email
+    send_hipchat
   end
 
   private
