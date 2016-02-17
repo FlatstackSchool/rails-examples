@@ -9,14 +9,25 @@ class FeedbacksController < ApplicationController
   end
 
   def create
-    ApplicationMailer.feedback(feedback).deliver_now! if feedback.save
+    DeliverNotifications.call(feedback_attributes) if feedback.valid?
     respond_with(feedback, location: root_path)
   end
 
   private
 
   def feedback_attributes
-    params.fetch(:feedback, {}).permit(:email, :name, :message, :phone)
+    params
+      .fetch(:feedback, author_attributes)
+      .permit(:email, :name, :message, :phone)
+  end
+  
+  def author_attributes
+    return {} unless current_user
+    
+    {
+      email: current_user.email,
+      name: current_user.full_name
+    }
   end
 end
 ```
@@ -30,19 +41,116 @@ class Feedback
 
   validates :email, :name, :message, presence: true
   validates :email, format: Devise.email_regexp
+end
+```
 
-  def save
-    valid?
+```ruby
+# app/interactors/deliver_notifications.rb
+class DeliverNotifications
+  ROOM = ENV["HIPCHAT_ROOM"]
+
+  include Interactor
+
+  def call
+    send_email
+    send_hipchat
+  end
+
+  private
+
+  def client
+    @_client ||= HipchatClient.connect
+  end
+
+  def send_email
+    ApplicationMailer.feedback(context).deliver_now!
+  end
+
+  def send_hipchat
+    return false unless client || context.name
+
+    client[ROOM].send("", message)
+  end
+
+  def message
+    "Feedback from #{context.name}: <br><br>
+    #{context.message}      <br><br>
+    ____________________________<br>
+    email: #{context.email}     <br>
+    phone: #{context.phone}"
   end
 end
 ```
 
 ```ruby
-# app/views/feedbacks/new.html.erb
-- title("Contact Us")
-- description("Contact the team")
-- keywords("Contact, Email, Touch, Getting in touch")
-- meta robots: "noindex"
+# app/services/hipchat_client.rb
+class HipchatClient
+  TOKEN = ENV["HIPCHAT_API_TOKEN"]
+  class << self
+    def connect
+      client || nil
+    end
+
+    private
+
+    def client
+      HipChat::Client.new(TOKEN, api_version: "v2", server_url: "https://fs.hipchat.com")
+    end
+  end
+end
+
+```
+
+```ruby
+# .env.example
+# We send all feedback email to this address
+FEEDBACK_EMAIL=test@example.com
+HIPCHAT_ROOM=room_name
+HIPCHAT_API_TOKEN=1234567890
+```
+
+```ruby
+# app/mailers/application_mailer.rb
+class ApplicationMailer < ActionMailer::Base
+  def feedback(feedback)
+    @feedback = feedback
+    mail(subject: "Feedback", from: feedback.email, to: ENV.fetch("FEEDBACK_EMAIL"))
+  end
+end
+```
+
+```slim
+# app/views/application/_navigation_main.html.slim
+
+ul.left
+  - if user_signed_in?
+    = active_link_to "Home", root_path, active: :exclusive, wrap_tag: :li
+  = active_link_to "Feedback", new_feedback_path, active: :exclusive, wrap_tag: :li
+```
+
+```slim
+# app/views/application_mailer/feedback.html.slim
+p
+  | Hello, here is feedback from #{@feedback.name} (#{@feedback.email} #{@feedback.phone})
+
+blockquote
+  = @feedback.message
+```
+
+```erb
+# app/views/application_mailer/feedback.text.erb
+Hello, here is feedback from <%= @feedback.name %> (<%= @feedback.email %> <%= @feedback.phone %>)
+
+<%= @feedback.message %>
+```
+
+```slim
+# app/views/feedbacks/new.html.slim
+ruby:
+  title("Contact Us")
+  description("Contact the team")
+  keywords("Contact, Email, Touch, Getting in touch")
+  meta robots: "noindex"
 
 .row
   .columns
@@ -57,8 +165,8 @@ end
         | You may find the answer in the #{link_to("FAQ", "#")}.
 
       .form-inputs
-        = f.input :name
-        = f.input :email
+        = f.input :name, input_html: { value: feedback.name }
+        = f.input :email, input_html: { value: feedback.email }
         = f.input :phone
         = f.input :message, as: :text
 
@@ -66,37 +174,7 @@ end
         = f.button :submit, "Submit"
 ```
 
-```ruby
-# .env.example
-# We send all feedback email to this address
-FEEDBACK_EMAIL=test@example.com
-
-# app/mailers/application_mailer.rb
-class ApplicationMailer < ActionMailer::Base
-  def feedback(feedback)
-    @feedback = feedback
-    mail(subject: "Feedback", from: feedback.email, to: ENV.fetch("FEEDBACK_EMAIL"))
-  end
-end
-```
-
-```ruby
-# app/views/application_mailer/feedback.html.erb
-p
-  | Hello, here is feedback from #{@feedback.name} (#{@feedback.email} #{@feedback.phone})
-
-blockquote
-  = @feedback.message
-```
-
-```ruby
-# app/views/application_mailer/feedback.text.erb
-Hello, here is feedback from <%= @feedback.name %> (<%= @feedback.email %> <%= @feedback.phone %>)
-
-<%= @feedback.message %>
-```
-
-```ruby
+```yml
 # config/locales/flash.en.yml
 en:
   flash:
@@ -131,6 +209,7 @@ FactoryGirl.define do
     name  { Faker::Name.name }
     message { Faker::Lorem.paragraph }
     phone { Faker::PhoneNumber.phone_number }
+    user
   end
 end
 ```
@@ -142,13 +221,19 @@ require "rails_helper"
 feature "Create Feedback." do
   let(:feedback_attributes) { attributes_for(:feedback) }
 
+  before do
+    allow_any_instance_of(DeliveryNotifications)
+      .to receive(:send_hipchat)
+      .and_return(true)
+  end
+
   scenario "Visitor creates feedback" do
     visit new_feedback_path
 
     fill_form :feedback, feedback_attributes
     click_button "Submit"
 
-    open_email(ENV.fetch("FEADBACK_EMAIL"))
+    open_email(ENV.fetch("FEEDBACK_EMAIL"))
 
     expect(current_email).to have_subject("Feedback")
     expect(current_email).to be_delivered_from(feedback_attributes[:email])
@@ -160,5 +245,74 @@ feature "Create Feedback." do
 
     expect(page).to have_content("Email was successfully sent.")
   end
+end
+
+```
+
+```ruby
+# spec/interactors/delivery_notifications_spec.rb
+
+require "rails_helper"
+
+describe DeliveryNotifications do
+  let(:feedback_attributes) { FactoryGirl.attributes_for(:feedback).merge(user: create(:user)) }
+  let(:mailer_double) { double }
+  let(:client_double) { double("HipChat::Client") }
+  let(:room_double) { double() }
+
+  subject(:call) { described_class.call(feedback_attributes) }
+
+  before do
+    allow(ApplicationMailer).to receive(:feedback).and_return(mailer_double)
+    allow(mailer_double).to receive(:deliver_now!).and_return("YES SIR!")
+    allow(HipchatClient).to receive(:connect).and_return(:client_double)
+    allow(client_double).to receive(:[]).with(described_class::ROOM).and_return(room_double)
+    allow(room_double).to receive(:send).and_return("ding dong!")
+  end
+
+  it "sends email and HipChat notifications" do
+    expect(ApplicationMailer).to receive(:feedback).and_return(mailer_double)
+    expect(mailer_double).to receive(:deliver_now!).and_return("YES SIR!")
+
+    expect(HipchatClient).to receive(:connect).and_return(client_double)
+    expect(client_double).to receive(:[]).with(described_class::ROOM).and_return(room_double)
+    expect(room_double).to receive(:send).and_return("ding dong!")
+
+    call
+  end
+end
+```
+
+```ruby
+# spec/services/hipchat_client_spec.rb
+require "rails_helper"
+
+describe HipchatClient do
+  let(:call) { described_class.connect }
+
+  before do
+    stub_const("HipchatClient::TOKEN", "123456")
+    allow(HipChat::Client)
+      .to receive(:new)
+      .with("123456", api_version: "v2", server_url: "https://fs.hipchat.com")
+  end
+
+  it "authenticates to Hipchat" do
+    expect(HipChat::Client)
+      .to receive(:new)
+      .with("123456", api_version: "v2", server_url: "https://fs.hipchat.com")
+
+    call
+  end
+end
+```
+
+```ruby
+# Gemfile.rb
+
+gem 'hipchat'
+
+group :development, :test do
+  gem 'rspec-its'
 end
 ```
