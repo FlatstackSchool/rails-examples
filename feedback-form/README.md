@@ -3,8 +3,9 @@
 ```ruby
 # app/controllers/feedbacks_controller.rb
 class FeedbacksController < ApplicationController
-  expose(:feedback) { Feedback.new(feedback_attributes) }
-  expose(:decorated_feedback) { FeedbackDecorator.new(feedback) }
+  expose_decorated(:feedback) do
+    Feedback.new(feedback_attributes)
+  end
 
   def new
   end
