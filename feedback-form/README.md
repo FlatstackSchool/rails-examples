@@ -9,7 +9,7 @@ class FeedbacksController < ApplicationController
   end
 
   def create
-    DeliveryNotifications.call(feedback_attributes) if feedback.valid?
+    DeliverNotifications.call(feedback_attributes) if feedback.valid?
     respond_with(feedback, location: root_path)
   end
 
@@ -45,8 +45,8 @@ end
 ```
 
 ```ruby
-# app/interactors/delivery_notifications.rb
-class DeliveryNotifications
+# app/interactors/deliver_notifications.rb
+class DeliverNotifications
   ROOM = ENV["HIPCHAT_ROOM"]
 
   include Interactor
