@@ -19,9 +19,17 @@ class FeedbacksController < ApplicationController
 
   def feedback_attributes
     params
-      .fetch(:feedback, {})
-      .permit(:email, :name, :message, :phone, :user)
-      .merge(user: current_user)
+      .fetch(:feedback, author_attributes)
+      .permit(:email, :name, :message, :phone)
+  end
+  
+  def author_attributes
+    return {} unless current_user
+    
+    {
+      email: current_user.email,
+      name: current_user.full_name
+    }
   end
 end
 ```
@@ -35,21 +43,6 @@ class Feedback
 
   validates :email, :name, :message, presence: true
   validates :email, format: Devise.email_regexp
-end
-```
-
-```ruby
-# app/decorators/feedback_decorator.rb
-class FeedbackDecorator < ApplicationDecorator
-  delegate :user, :phone, :message
-
-  def author
-    user ? user.full_name : ""
-  end
-
-  def email
-    user ? user.email : ""
-  end
 end
 ```
 
@@ -171,15 +164,15 @@ ruby:
 
 .row
   .medium-6.columns
-    = simple_form_for(decorated_feedback, url: feedback_path) do |f|
+    = simple_form_for(feedback, url: feedback_path) do |f|
 
       legend
         ' Have a question?
         | You may find the answer in the #{link_to("FAQ", "#")}.
 
       .form-inputs
-        = f.input :name, input_html: { value: decorated_feedback.author }
-        = f.input :email, input_html: { value: decorated_feedback.email }
+        = f.input :name, input_html: { value: feedback.name }
+        = f.input :email, input_html: { value: feedback.email }
         = f.input :phone
         = f.input :message, as: :text
 
@@ -234,13 +227,19 @@ require "rails_helper"
 feature "Create Feedback." do
   let(:feedback_attributes) { attributes_for(:feedback) }
 
+  before do
+    allow_any_instance_of(DeliveryNotifications)
+      .to receive(:send_hipchat)
+      .and_return(true)
+  end
+
   scenario "Visitor creates feedback" do
     visit new_feedback_path
 
     fill_form :feedback, feedback_attributes
     click_button "Submit"
 
-    open_email(ENV.fetch("FEADBACK_EMAIL"))
+    open_email(ENV.fetch("FEEDBACK_EMAIL"))
 
     expect(current_email).to have_subject("Feedback")
     expect(current_email).to be_delivered_from(feedback_attributes[:email])
@@ -253,6 +252,7 @@ feature "Create Feedback." do
     expect(page).to have_content("Email was successfully sent.")
   end
 end
+
 ```
 
 ```ruby
@@ -309,30 +309,6 @@ describe HipchatClient do
       .with("123456", api_version: "v2", server_url: "https://fs.hipchat.com")
 
     call
-  end
-end
-
-```
-
-```ruby
-# spec/decorators/feedback_decorator_spec.rb
-
-require "rails_helper"
-
-describe FeedbackDecorator do
-  let(:user) { User.new(full_name: "Name", email: "user@example.com") }
-  let(:feedback) { build(:feedback, user: user) }
-
-  subject { described_class.new(feedback) }
-
-  its(:author) { is_expected.to eq user.full_name }
-  its(:email) { is_expected.to eq user.email}
-
-  context "when there is no user" do
-    let(:user) { nil }
-
-    its(:author) { is_expected.to eq "" }
-    its(:email) { is_expected.to eq ""}
   end
 end
 ```
