@@ -11,16 +11,11 @@ class FeedbacksController < ApplicationController
   end
 
   def create
-    perform_delivery if feedback.valid?
+    DeliveryNotifications.call(feedback_attributes) if feedback.valid?
     respond_with(feedback, location: root_path)
   end
 
   private
-
-  def perform_delivery
-    ApplicationMailer.feedback(feedback).deliver_now!
-    HipchatInteractor::Organizer.call(feedback_attributes)
-  end
 
   def feedback_attributes
     params
@@ -59,73 +54,64 @@ end
 ```
 
 ```ruby
-# app/interactors/hipchat_interactor/organizer.rb
-module HipchatInteractor
-  class Organizer
-    include Interactor::Organizer
+# app/interactors/delivery_notifications.rb
+class DeliveryNotifications
+  ROOM = ENV["HIPCHAT_ROOM"]
 
-    organize HipchatInteractor::Connector, HipchatInteractor::Messenger
+  include Interactor
+
+  def call
+    if context
+      send_email
+      send_hipchat
+    else
+      context.fail!(message: "Delivery Failed!")
+    end
+  end
+
+  private
+
+  def client
+    @_client ||= HipchatClient.connect
+  end
+
+  def send_email
+    ApplicationMailer.feedback(context).deliver_now!
+  end
+
+  def send_hipchat
+    return false unless client || context.name
+
+    client[ROOM].send("", message)
+  end
+
+  def message
+    "Feedback from #{context.name}: <br><br>
+    #{context.message}      <br><br>
+    ____________________________<br>
+    email: #{context.email}     <br>
+    phone: #{context.phone}"
   end
 end
 ```
 
 ```ruby
-# app/interactors/hipchat_interactor/connector.rb
-module HipchatInteractor
-  class Connector
-    TOKEN = ENV["HIPCHAT_API_TOKEN"]
-
-    include Interactor
-
-    def call
-      if client
-        context.client = client
-      else
-        context.fail!(message: "Couldn't establish connection to HipChat servers.")
-      end
+# app/services/hipchat_client.rb
+class HipchatClient
+  TOKEN = ENV["HIPCHAT_API_TOKEN"]
+  class << self
+    def connect
+      client || nil
     end
 
     private
 
     def client
-      @_client ||= HipChat::Client
-        .new(TOKEN, api_version: "v2", server_url: "https://fs.hipchat.com")
+      HipChat::Client.new(TOKEN, api_version: "v2", server_url: "https://fs.hipchat.com")
     end
   end
 end
-```
 
-```ruby
-# app/interactors/hipchat_interactor/messenger.rb
-module HipchatInteractor
-  class Messenger
-    ROOM = ENV["HIPCHAT_ROOM"]
-
-    include Interactor
-
-    def call
-      if context.client && context.name
-        context.client[ROOM].send(name, message)
-      else
-        context.fail!(message: "Couldn't send a message")
-      end
-    end
-
-    private
-
-    def name
-      context.name.to_s
-    end
-
-    def message
-      "Feedback from #{name}: <br><br>
-      #{context.message}      <br><br>
-      ____________________________<br>
-      email: #{context.email}     <br>
-      phone: #{context.phone}"
-    end
-  end
-end
 ```
 
 ```ruby
@@ -236,6 +222,7 @@ FactoryGirl.define do
     name  { Faker::Name.name }
     message { Faker::Lorem.paragraph }
     phone { Faker::PhoneNumber.phone_number }
+    user
   end
 end
 ```
@@ -269,22 +256,33 @@ end
 ```
 
 ```ruby
-# spec/interactors/hipchat_interactor/organizer_spec.rb
+# spec/interactors/delivery_notifications_spec.rb
 
 require "rails_helper"
 
-describe HipchatInteractor::Organizer do
-  let(:params) { FactoryGirl.attributes_for(:feedback) }
-  let(:call) { described_class.call(params) }
+describe DeliveryNotifications do
+  let(:feedback_attributes) { FactoryGirl.attributes_for(:feedback).merge(user: create(:user)) }
+  let(:mailer_double) { double }
+  let(:client_double) { double("HipChat::Client") }
+  let(:room_double) { double() }
+
+  subject(:call) { described_class.call(feedback_attributes) }
 
   before do
-    allow_any_instance_of(HipchatInteractor::Connector).to receive(:call)
-    allow_any_instance_of(HipchatInteractor::Messenger).to receive(:call)
+    allow(ApplicationMailer).to receive(:feedback).and_return(mailer_double)
+    allow(mailer_double).to receive(:deliver_now!).and_return("YES SIR!")
+    allow(HipchatClient).to receive(:connect).and_return(:client_double)
+    allow(client_double).to receive(:[]).with(described_class::ROOM).and_return(room_double)
+    allow(room_double).to receive(:send).and_return("ding dong!")
   end
 
-  it "calls HipchatInteractor::Connector and HipchatInteractor::Messenger" do
-    expect_any_instance_of(HipchatInteractor::Connector).to receive(:call)
-    expect_any_instance_of(HipchatInteractor::Messenger).to receive(:call)
+  it "sends email and HipChat notifications" do
+    expect(ApplicationMailer).to receive(:feedback).and_return(mailer_double)
+    expect(mailer_double).to receive(:deliver_now!).and_return("YES SIR!")
+
+    expect(HipchatClient).to receive(:connect).and_return(client_double)
+    expect(client_double).to receive(:[]).with(described_class::ROOM).and_return(room_double)
+    expect(room_double).to receive(:send).and_return("ding dong!")
 
     call
   end
@@ -292,15 +290,14 @@ end
 ```
 
 ```ruby
-# spec/interactors/hipchat_interactor/connector_spec.rb
-
+# spec/services/hipchat_client_spec.rb
 require "rails_helper"
 
-describe HipchatInteractor::Connector do
-  let(:call) { described_class.call }
+describe HipchatClient do
+  let(:call) { described_class.connect }
 
   before do
-    stub_const("HipchatInteractor::Connector::TOKEN", "123456")
+    stub_const("HipchatClient::TOKEN", "123456")
     allow(HipChat::Client)
       .to receive(:new)
       .with("123456", api_version: "v2", server_url: "https://fs.hipchat.com")
@@ -314,17 +311,7 @@ describe HipchatInteractor::Connector do
     call
   end
 end
-```
 
-```ruby
-# spec/interactors/hipchat_interactor/messenger_spec.rb
-
-require "rails_helper"
-
-describe HipchatInteractor::Messenger do
-  xit "pending" do
-  end
-end
 ```
 
 ```ruby
