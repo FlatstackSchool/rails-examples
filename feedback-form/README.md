@@ -9,14 +9,24 @@ class FeedbacksController < ApplicationController
   end
 
   def create
-    ApplicationMailer.feedback(feedback).deliver_now! if feedback.save
+    SubmitFeedback.call(feedback: feedback) if feedback.valid?
+
     respond_with(feedback, location: root_path)
   end
 
   private
 
   def feedback_attributes
-    params.fetch(:feedback, {}).permit(:email, :name, :message, :phone)
+    params.fetch(:feedback, default_attributes).permit(:email, :name, :message, :phone)
+  end
+
+  def default_attributes
+    return {} unless current_user
+
+    {
+      email: current_user.email,
+      name: current_user.full_name
+    }
   end
 end
 ```
@@ -30,15 +40,11 @@ class Feedback
 
   validates :email, :name, :message, presence: true
   validates :email, format: Devise.email_regexp
-
-  def save
-    valid?
-  end
 end
 ```
 
-```ruby
-# app/views/feedbacks/new.html.erb
+```slim
+# app/views/feedbacks/new.html.slim
 - title("Contact Us")
 - description("Contact the team")
 - keywords("Contact, Email, Touch, Getting in touch")
@@ -70,7 +76,80 @@ end
 # .env.example
 # We send all feedback email to this address
 FEEDBACK_EMAIL=test@example.com
+HIPCHAT_ROOM_ID=hip_chat_room_id
+HIPCHAT_AUTH_TOKEN=valid_room_token
+```
 
+```ruby
+# Gemfile
+...
+gem "hipchat"
+...
+```
+
+```ruby
+# app/interactors/submit_feedback.rb
+class SubmitFeedback
+  include Interactor::Organizer
+
+  organize SendFeedbackEmail, SendHipChatNotification
+end
+```
+
+```ruby
+# app/interactors/send_feedback_email.rb
+class SendFeedbackEmail
+  include Interactor
+
+  delegate :feedback, to: :context
+
+  def call
+    ApplicationMailer.feedback(feedback).deliver_now!
+  end
+end
+```
+
+```ruby
+# app/interactors/send_hip_chat_notification.rb
+class SendHipChatNotification
+  include Interactor
+
+  delegate :feedback, to: :context
+
+  def call
+    HipChatClient.new.send_feedback(feedback)
+  end
+end
+```
+
+```ruby
+# app/models/hip_chat_client.rb
+class HipChatClient
+  attr_reader :room, :auth_token
+  private :room, :auth_token
+
+  def initialize
+    @room = ENV["HIPCHAT_ROOM_ID"]
+    @auth_token = ENV["HIPCHAT_AUTH_TOKEN"]
+  end
+
+  def send_feedback(feedback)
+    feedback_room.send(feedback.name, feedback.message)
+  end
+
+  private
+
+  def feedback_room
+    connection[room]
+  end
+
+  def connection
+    HipChat::Client.new(auth_token, api_version: "v2")
+  end
+end
+```
+
+```ruby
 # app/mailers/application_mailer.rb
 class ApplicationMailer < ActionMailer::Base
   def feedback(feedback)
@@ -80,8 +159,8 @@ class ApplicationMailer < ActionMailer::Base
 end
 ```
 
-```ruby
-# app/views/application_mailer/feedback.html.erb
+```slim
+# app/views/application_mailer/feedback.html.slim
 p
   | Hello, here is feedback from #{@feedback.name} (#{@feedback.email} #{@feedback.phone})
 
@@ -89,7 +168,7 @@ blockquote
   = @feedback.message
 ```
 
-```ruby
+```erb
 # app/views/application_mailer/feedback.text.erb
 Hello, here is feedback from <%= @feedback.name %> (<%= @feedback.email %> <%= @feedback.phone %>)
 
@@ -112,8 +191,8 @@ en:
         alert: '%{resource_name} could not be destroyed.'
 
     feedbacks:
-        create:
-          notice: "Email was successfully sent."
+      create:
+        notice: "Feedback was successfully sent."
 ```
 
 ```ruby
@@ -142,13 +221,19 @@ require "rails_helper"
 feature "Create Feedback." do
   let(:feedback_attributes) { attributes_for(:feedback) }
 
+  before do
+    allow_any_instance_of(HipChatClient)
+      .to receive(:send_feedback)
+      .and_return(:true)
+  end
+
   scenario "Visitor creates feedback" do
     visit new_feedback_path
 
     fill_form :feedback, feedback_attributes
     click_button "Submit"
 
-    open_email(ENV.fetch("FEADBACK_EMAIL"))
+    open_email(ENV.fetch("FEEDBACK_EMAIL"))
 
     expect(current_email).to have_subject("Feedback")
     expect(current_email).to be_delivered_from(feedback_attributes[:email])
@@ -158,7 +243,7 @@ feature "Create Feedback." do
     expect(current_email).to have_body_text(feedback_attributes[:email])
     expect(current_email).to have_body_text(feedback_attributes[:message])
 
-    expect(page).to have_content("Email was successfully sent.")
+    expect(page).to have_content("Feedback was successfully sent.")
   end
 end
 ```
