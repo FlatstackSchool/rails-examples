@@ -3,7 +3,7 @@
 ```ruby
 # app/controllers/feedbacks_controller.rb
 class FeedbacksController < ApplicationController
-  expose(:feedback) { Feedback.new(feedback_attributes) }
+  expose(:feedback, attributes: feedback_attributes)
 
   def new
   end
@@ -33,6 +33,12 @@ class Feedback
 
   def save
     valid?
+  end
+
+  def attributes=(attributes)
+    attributes.each do |key, value|
+      public_send "#{key}=", value
+    end
   end
 end
 ```
