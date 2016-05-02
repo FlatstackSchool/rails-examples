@@ -2,6 +2,7 @@
 
 Reference:
 * [Refile](https://github.com/refile/refile)
+
 ---
 
 ```bash
@@ -182,14 +183,10 @@ Before running tests save any lightweight image as `spec/fixtures/avatar.png`.
 For instance [this one](http://i7.5cm.ru/i/TWFB.png).
 
 ```ruby
-# spec/features/user/account/avatar_spec.rb
+# spec/support/features/shared_contexts/upload_avatar.rb
 
-require "rails_helper"
-
-feature "Upload Avatar" do
+shared_context "upload avatar" do
   let(:file) { File.open(Rails.root.join("spec/fixtures/avatar.png")) }
-
-  include_context "current user signed in"
 
   def visit_profile_settings
     visit edit_user_registration_path(current_user)
@@ -197,13 +194,24 @@ feature "Upload Avatar" do
 
   def upload_avatar
     visit_profile_settings
-    fill_form(:user, current_password: current_user.password, avatar: file)
+    fill_form(:user, avatar: file)
     click_on "Update"
   end
 
   background do
     stub_request(:any, /amazonaws.com/)
   end
+end
+```
+
+```ruby
+# spec/features/user/account/upload_avatar_spec.rb
+
+require "rails_helper"
+
+feature "Upload Avatar" do
+  include_context "current user signed in"
+  include_context "upload avatar"
 
   scenario "User uploads avatar" do
     upload_avatar
@@ -211,22 +219,30 @@ feature "Upload Avatar" do
 
     expect(page).to have_css("img[alt='Avatar']")
   end
+end
+```
 
-  describe "Removal" do
-    background do
-      upload_avatar
-      visit_profile_settings
-    end
+```ruby
+# spec/features/user/account/remove_avatar_spec.rb
 
-    scenario "User removes avatar", js: true do
-      click_on "Remove avatar"
-      fill_form(:user, current_password: current_user.password)
-      click_on "Update"
+require "rails_helper"
 
-      visit_profile_settings
+feature "Remove Avatar", js: true do
+  include_context "current user signed in"
+  include_context "upload avatar"
 
-      expect(page).to have_css("img[alt='Defaultavatar']")
-    end
+  background do
+    upload_avatar
+    visit_profile_settings
+  end
+
+  scenario "User uploads avatar" do
+    click_on "Remove avatar"
+    click_on "Update"
+
+    visit_profile_settings
+
+    expect(page).to have_css("img[alt='Defaultavatar']")
   end
 end
 ```
@@ -249,7 +265,7 @@ Set:
 <?xml version="1.0" encoding="UTF-8"?>
 <CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
     <CORSRule>
-        <AllowedOrigin>{IP ADDRESS or *}</AllowedOrigin>
+        <AllowedOrigin>{HOST or *}</AllowedOrigin>
         <AllowedMethod>GET</AllowedMethod>
         <AllowedMethod>POST</AllowedMethod>
         <MaxAgeSeconds>3000</MaxAgeSeconds>
@@ -259,3 +275,6 @@ Set:
     </CORSRule>
 </CORSConfiguration>
 ```
+
+You can restrict the allowed origin to only your host (e.g. "http://www.example.com"),
+but since your bucket is only writable with authentication anyway, this shouldn't be necessary.
