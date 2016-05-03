@@ -55,10 +55,10 @@ AMAZON_BUCKET_NAME=
 (($) ->
 
   class PreviewImage
-    constructor: (input) ->
-      @dataKey = "preview"
+    constructor: (element) ->
+      @dataKey = "file-preview"
       @defaults = width: 200
-      @options = @_options(input)
+      @options = @_options(element)
 
       @_bind()
 
@@ -85,7 +85,7 @@ AMAZON_BUCKET_NAME=
     _options: (input) ->
       $.extend @defaults, $(input).data(@dataKey)
 
-  $.fn.filePreview = (e) ->
+  $.fn.filePreview = ->
     return unless @length
     new PreviewImage(this)
 
@@ -134,7 +134,7 @@ AMAZON_BUCKET_NAME=
 
 $(document).on "ready page:load", ->
   $("[data-file-remove]").fileRemove()
-  $("[data-preview]").filePreview()
+  $("[data-file-preview]").filePreview()
 ```
 
 ```ruby
@@ -160,22 +160,22 @@ end
 ```slim
 / app/views/users/registrations/edit.html.slim
 
-        .edit-profile-photo
-          .wrap
-            = attachment_image_tag(resource, :avatar, :fill, 200, 200, format: "jpg",
-                fallback: "defaultavatar.png", id: "avatar-image")
-          .actions
-            .change
-              = f.input :avatar, as: :attachment, direct: true, presigned: true
-                  input_html: { data: { preview: { selector: "avatar-image",
-                    remove_selector: "[data-file-remove]" } } }
+.edit-profile-photo
+  .wrap
+    = attachment_image_tag(resource, :avatar, :fill, 200, 200, format: "jpg",
+        fallback: "defaultavatar.png", id: "avatar-image")
+  .actions
+    .change
+      = f.input :avatar, as: :attachment, direct: true, presigned: true
+          input_html: { data: { "file-preview" => { selector: "avatar-image",
+            remove_selector: "[data-file-remove]" } } }
 
-            .remove
-              = link_to "Remove avatar", "#",
-                  data: { "file-remove" => { selector: "avatar-image", hidden: "user_remove_avatar",
-                    file_input: "user_avatar", default: image_path("defaultavatar.png") } },
-                  class: "button small alert #{resource.avatar.nil? ? 'hidden' : ''}"
-              = f.check_box :remove_avatar, class: "hidden"
+    .remove
+      = link_to "Remove avatar", "#",
+          data: { "file-remove" => { selector: "avatar-image", hidden: "user_remove_avatar",
+            file_input: "user_avatar", default: image_path("defaultavatar.png") } },
+          class: "button small alert #{resource.avatar.nil? ? 'hidden' : ''}"
+      = f.check_box :remove_avatar, class: "hidden"
 ```
 
 Unfortunately `Refile::FileDouble` does not work with capybara.
