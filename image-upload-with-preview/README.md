@@ -42,6 +42,15 @@ AMAZON_BUCKET_REGION=
 AMAZON_BUCKET_NAME=
 ```
 
+```ruby
+# .env.example
+
+AMAZON_ACCESS_KEY_ID=
+AMAZON_SECRET_ACCESS_KEY=
+AMAZON_BUCKET_REGION=
+AMAZON_BUCKET_NAME=
+```
+
 ```coffee
 # app/assets/javascripts/application.coffee
 
@@ -54,7 +63,7 @@ AMAZON_BUCKET_NAME=
 
 (($) ->
 
-  class PreviewImage
+  class FilePreview
     constructor: (element) ->
       @dataKey = "file-preview"
       @defaults = width: 200
@@ -87,7 +96,7 @@ AMAZON_BUCKET_NAME=
 
   $.fn.filePreview = ->
     return unless @length
-    new PreviewImage(this)
+    new FilePreview(this)
 
 ) jQuery
 ```
@@ -97,7 +106,7 @@ AMAZON_BUCKET_NAME=
 
 (($) ->
 
-  class RemoveImage
+  class FileRemove
     constructor: (element) ->
       @dataKey = "file-remove"
       @options = element.data(@dataKey)
@@ -124,7 +133,7 @@ AMAZON_BUCKET_NAME=
 
   $.fn.fileRemove = ->
     return unless @length
-    new RemoveImage(this)
+    new FileRemove(this)
 
 ) jQuery
 ```
@@ -247,7 +256,7 @@ feature "Remove Avatar", js: true do
 end
 ```
 
-Allow to connect to codeclimate from tests so that build would not brake up on semaphore.
+Allow to connect to CodeClimate from tests so that build would not break up on SemaphoreCI.
 
 ```ruby
 # spec/rails_helper.rb
