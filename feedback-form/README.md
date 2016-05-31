@@ -3,7 +3,7 @@
 ```ruby
 # app/controllers/feedbacks_controller.rb
 class FeedbacksController < ApplicationController
-  expose(:feedback, attributes: feedback_attributes)
+  expose(:feedback, attributes: :feedback_attributes)
 
   def new
   end
