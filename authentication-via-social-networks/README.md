@@ -14,66 +14,61 @@ gem "omniauth-google-oauth2"
 ```ruby
 # app/controllers/omniauth_callbacks_controller.rb
 class OmniauthCallbacksController < Devise::OmniauthCallbacksController
-  SocialProfile::PROVIDERS.each do |provider|
+  include OmniauthHelper
+
+  Identity::PROVIDERS.each do |provider|
     define_method(provider.to_s) do
-      begin
-        current_user ? connect_social_profile : handle_sign_in
-      rescue AuthVerificationPolicy::OauthError => e
-        redirect_to root_path, flash: { notice: e.to_s }
-      end
+      show_verification_notice and return unless auth_verified?
+
+      current_user ? connect_identity : process_sign_in
     end
   end
 
   private
 
-  def connect_social_profile
-    OauthConnectOrganizer.new(auth, current_user).call
-    redirect_to edit_user_registration_path
-  end
-
-  def auth
-    request.env["omniauth.auth"]
-  end
-
-  def handle_sign_in
-    user = auth_organizer.new(auth).user
-    sign_in_and_redirect user, event: :authentication
-  end
-
-  def auth_organizer
-    auth_verified? ? VerifiedAuthOrganizer : UnverifiedAuthOrganizer
+  def show_verification_notice
+    redirect_to root_path, flash: { error: t("omniauth.verification.failure", kind: provider_name(auth.provider)) }
   end
 
   def auth_verified?
     AuthVerificationPolicy.new(auth).verified?
   end
 
-  def after_sign_in_path_for(resource)
-    if resource.confirmed?
-      edit_user_registration_path
-    else
-      session[:auth_verified?] = auth_verified?
-      resource.reset_password(new_password, new_password)
-      finish_signup_path(resource)
-    end
+  def auth
+    request.env["omniauth.auth"]
   end
 
-  def new_password
-    @new_password ||= Devise.friendly_token.first(8)
+  def connect_identity
+    ConnectIdentity.new(current_user, auth).call
+    redirect_to edit_user_registration_path
+  end
+
+  def process_sign_in
+    user = FetchOauthUser.new(auth).call
+    sign_in_and_redirect user, event: :authentication
   end
 end
 ```
 
 ```ruby
-# app/controllers/social_profiles_controller.rb
-class SocialProfilesController < ApplicationController
+# app/helpers/omniauth_helper.rb
+module OmniauthHelper
+  def provider_name(provider)
+    t "active_record.attributes.identity.provider_name.#{provider}"
+  end
+end
+```
+
+```ruby
+# app/controllers/identities_controller.rb
+class IdentitiesController < ApplicationController
   before_action :authenticate_user!
 
-  expose(:social_profiles) { current_user.social_profiles }
-  expose(:social_profile)
+  expose(:identities) { current_user.identities }
+  expose(:identity)
 
   def destroy
-    if social_profile.destroy
+    if identity.destroy
       flash[:notice] = t "flash.actions.destroy.notice", resource_name: resource_name
     else
       flash[:alert] = t "flash.actions.destroy.alert", resource_name: resource_name
@@ -84,66 +79,14 @@ class SocialProfilesController < ApplicationController
   private
 
   def resource_name
-    SocialProfile.model_name.human
+    Identity.model_name.human
   end
 end
 ```
 
 ```ruby
-# app/controllers/users_controller.rb
-class UsersController < ApplicationController
-  before_action :authenticate_user!, only: :home
-
-  expose(:user, attributes: :user_params)
-
-  def home
-  end
-
-  def finish_signup
-    return false unless request.patch?
-
-    user.update_attributes(user_params) ? sign_in_user : render_errors
-  end
-
-  private
-
-  def user_params
-    params.require(:user).permit(%i(full_name email password))
-  end
-
-  def sign_in_user
-    confirm_user
-    sign_in(user, bypass: true)
-    redirect_to root_path, notice: "Welcome!"
-  end
-
-  def render_errors
-    render :finish_signup
-  end
-
-  def confirm_user
-    if session[:auth_verified?]
-      session[:auth_verified?] = nil
-      user.update_attribute(:confirmed_at, Time.zone.now)
-    else
-      user.send_confirmation_instructions
-    end
-  end
-end
-```
-
-```ruby
-# app/helpers/omniauth_helper.rb
-module OmniauthHelper
-  def provider_name(provider)
-    t "active_record.attributes.social_profile.provider_name.#{provider}"
-  end
-end
-```
-
-```ruby
-# app/interactors/connect_social_profile.rb
-class ConnectSocialProfile
+# app/interactors/connect_identity.rb
+class ConnectIdentity
   attr_reader :user, :auth
   private :user, :auth
 
@@ -153,21 +96,30 @@ class ConnectSocialProfile
   end
 
   def call
-    social_profile ? update_social_profile : create_social_profile
+    update_or_create_identity
+    confirm_user
   end
 
   private
 
-  def social_profile
-    @social_profile ||= SocialProfile.from_omniauth(auth)
+  def update_or_create_identity
+    identity.present? ? update_identity : create_identity
   end
 
-  def update_social_profile
-    social_profile.update_attribute(:user, user)
+  def identity
+    @identity ||= Identity.from_omniauth(auth)
   end
 
-  def create_social_profile
-    user.social_profiles.create!(provider: auth.provider, uid: auth.uid)
+  def update_identity
+    identity.update_attribute(:user, user)
+  end
+
+  def create_identity
+    user.identities.create!(provider: auth.provider, uid: auth.uid)
+  end
+
+  def confirm_user
+    user.confirm if user.email == auth.info.email
   end
 end
 ```
@@ -183,27 +135,59 @@ class CreateUserFromAuth
   end
 
   def call
-    user = User.new(
-      email: auth.info.email,
-      full_name: auth.info.name,
-      password: new_password,
-      password_confirmation: new_password
-    )
-    user.skip_confirmation_notification! && user.save!
+    user = User.new(user_params)
+    user.skip_confirmation!
+    user.save!
     user
   end
 
   private
 
-  def new_password
-    @new_password ||= Devise.friendly_token.first(8)
+  def user_params
+    password = Devise.friendly_token.first(8)
+    {
+      email: auth.info.email,
+      full_name: auth.info.name,
+      password: password,
+      password_confirmation: password
+    }
   end
 end
 ```
 
 ```ruby
-# app/interactors/find_user_by_email_service.rb
-class FindUserByEmailService
+# app/interactors/fetch_oauth_user.rb
+class FetchOauthUser
+  attr_reader :auth
+  private :auth
+
+  def initialize(auth)
+    @auth = auth
+  end
+
+  def call
+    user_found_by_uid || user_found_by_email || new_user
+  end
+
+  private
+
+  def user_found_by_uid
+    Identity.from_omniauth(auth).try(:user)
+  end
+
+  def user_found_by_email
+    FindUserByEmail.new(auth).call
+  end
+
+  def new_user
+    CreateUserFromAuth.new(auth).call
+  end
+end
+```
+
+```ruby
+# app/interactors/find_user_by_email.rb
+class FindUserByEmail
   attr_reader :auth
   private :auth
 
@@ -214,7 +198,8 @@ class FindUserByEmailService
   def call
     return unless user
 
-    create_social_profile
+    create_identity
+    user.confirm unless user.confirmed?
     user
   end
 
@@ -224,124 +209,15 @@ class FindUserByEmailService
     @user ||= User.find_by(email: auth.info.email)
   end
 
-  def create_social_profile
-    user.social_profiles.create!(provider: auth.provider, uid: auth.uid)
+  def create_identity
+    user.identities.where(provider: auth.provider, uid: auth.uid).first_or_create!
   end
 end
 ```
 
 ```ruby
-# app/interactors/oauth_connect_organizer.rb
-class OauthConnectOrganizer
-  attr_reader :auth, :user
-  private :auth, :user
-
-  def initialize(auth, user)
-    @auth = auth
-    @user = user
-  end
-
-  def call
-    unless user.confirmed?
-      auth_verified? ? process_user_confirmation : fail_oauth
-    end
-
-    connect_social_profile
-  end
-
-  private
-
-  def auth_verified?
-    AuthVerificationPolicy.new(auth).verified?
-  end
-
-  def process_user_confirmation
-    user.confirm
-    user.send_reset_password_instructions
-  end
-
-  def fail_oauth
-    fail AuthVerificationPolicy::OauthError,
-      "Please confirm your account before connecting your #{auth.provider} account."
-  end
-
-  def connect_social_profile
-    ConnectSocialProfile.new(user, auth).call
-  end
-end
-```
-
-```ruby
-# app/interactors/unverified_auth_organizer.rb
-class UnverifiedAuthOrganizer
-  attr_reader :auth
-  private :auth
-
-  def initialize(auth)
-    @auth = auth
-  end
-
-  def user
-    check_user_by_email!
-
-    found_user.send_confirmation_instructions unless found_user.confirmed?
-    found_user
-  end
-
-  private
-
-  def check_user_by_email!
-    user_by_email = User.find_by(email: auth.info.email)
-    fail AuthVerificationPolicy::OauthError, "Please, connect your account from profile page." if user_by_email
-  end
-
-  def found_user
-    user_found_by_uid || new_user
-  end
-
-  def user_found_by_uid
-    @user_found_by_uid ||= SocialProfile.from_omniauth(auth).try(:user)
-  end
-
-  def new_user
-    @new_user ||= CreateUserFromAuth.new(auth).call
-  end
-end
-```
-
-```ruby
-# app/interactors/verified_auth_organizer.rb
-class VerifiedAuthOrganizer
-  attr_reader :auth
-  private :auth
-
-  def initialize(auth)
-    @auth = auth
-  end
-
-  def user
-    user_found_by_uid || user_found_by_email || new_user
-  end
-
-  private
-
-  def user_found_by_uid
-    SocialProfile.from_omniauth(auth).try(:user)
-  end
-
-  def user_found_by_email
-    FindUserByEmailService.new(auth).call
-  end
-
-  def new_user
-    CreateUserFromAuth.new(auth).call
-  end
-end
-```
-
-```ruby
-# app/models/social_profile.rb
-class SocialProfile < ActiveRecord::Base
+# app/models/identity.rb
+class Identity < ActiveRecord::Base
   PROVIDERS = OmniAuth.strategies.map { |s| s.to_s.demodulize.underscore }.drop(1)
 
   belongs_to :user
@@ -358,11 +234,10 @@ end
 ```ruby
 # app/models/user.rb
 class User < ActiveRecord::Base
-  devise :database_authenticatable, :registerable, :confirmable,
-    :recoverable, :rememberable, :trackable, :validatable,
-    :omniauthable, omniauth_providers: SocialProfile::PROVIDERS
+  devise ..., :omniauthable, omniauth_providers: Identity::PROVIDERS
 
-  has_many :social_profiles, dependent: :destroy
+  has_many :identities, dependent: :destroy
+  ...
 end
 ```
 
@@ -380,20 +255,12 @@ class AuthVerificationPolicy
   end
 
   def verified?
-    request_verification_for
+    send(auth.provider)
   rescue NoMethodError
-    fail_with_error
+    fail OauthError, I18n.t("omniauth.verification.not_implemented", kind: auth.provider)
   end
 
   private
-
-  def request_verification_for
-    send(auth.provider)
-  end
-
-  def fail_with_error
-    fail ArgumentError, I18n.t("omniauth.verification.not_implemented", kind: auth.provider)
-  end
 
   def facebook
     auth.info.verified? || auth.extra.raw_info.verified?
@@ -406,47 +273,26 @@ end
 ```
 
 ```ruby
-# app/views/social_profiles/_list.html.slim
-- if social_profiles.any?
+# app/views/identities/_list.html.slim
+- if identities.any?
   b Successfully authorized via:
-  ul.js-social-profiles
-    - social_profiles.each do |social_profile|
-      li = link_to "#{provider_name(social_profile.provider)} (#{social_profile.uid.truncate(9)}). Unauthorize?",
-                   social_profile,
-                   data: { confirm: "Are you sure you want to remove this social profile?" },
+  ul.js-identities
+    - identities.each do |identity|
+      li = link_to "#{provider_name(identity.provider)} (#{identity.uid.truncate(9)}). Unauthorize?",
+                   identity,
+                   data: { confirm: "Are you sure you want to remove this identity?" },
                    method: :delete,
                    class: "js-unauthorize"
-
 b Add service to sign in with:
 ul
-  - SocialProfile::PROVIDERS.each do |provider|
+  - Identity::PROVIDERS.each do |provider|
     li = link_to provider_name(provider), user_omniauth_authorize_path(provider)
-```
-
-```ruby
-# app/views/users/finish_signup.html.slim
-.row
-  h3 Finish Signup
-
-  .medium-6.columns
-    = simple_form_for user,
-      as: 'user',
-      url: finish_signup_path(user),
-      html: { method: :patch } do |f|
-
-      .form-inputs
-        = f.input :email, required: true, autofocus: true,  placeholder: "Your email here"
-
-        = f.input :password, required: true, hint: '', placeholder: "Your password here"
-
-      .form-actions
-        = f.button :submit, "Finish Signup"
 ```
 
 ```ruby
 # app/views/users/registrations/edit.html.slim
 ...
-= render "social_profiles/list", social_profiles: current_user.social_profiles
+= render "identities/list", identities: current_user.identities
 ...
 ```
 
@@ -459,11 +305,11 @@ config.omniauth :facebook, ENV["FACEBOOK_APP_ID"], ENV["FACEBOOK_APP_SECRET"], i
 ```
 
 ```ruby
-# config/locales/models/social_profile.en.yml
+# config/locales/models/identity.en.yml
 en:
   active_record:
     attributes:
-      social_profile:
+      identity:
         provider_name:
           google_oauth2: Google
           facebook: Facebook
@@ -474,7 +320,7 @@ en:
 en:
   omniauth:
     verification:
-      failure: Your %{kind} account can't be used to sign in. Please verify it via profile page.
+      failure: Please confirm your %{kind} account before continuing.
       not_implemented: Verification checking is not implemented for %{kind}.
 ```
 
@@ -482,17 +328,16 @@ en:
 # config/routes.rb
 ...
 devise_for :users, controllers: { omniauth_callbacks: "omniauth_callbacks" }
-resources :social_profiles, only: :destroy
-match "/users/:id/finish_signup" => "users#finish_signup", via: %i(get patch), as: :finish_signup
+resources :identities, only: :destroy
 ...
 ```
 
 ```ruby
-# db/migrate/20151208195800_create_social_profiles.rb
-class CreateSocialProfiles < ActiveRecord::Migration
+# db/migrate/20160531141911_create_identities.rb
+class CreateIdentities < ActiveRecord::Migration
   def change
-    create_table :social_profiles do |t|
-      t.references :user, index: true
+    create_table :identities do |t|
+      t.belongs_to :user, index: true
       t.string :provider, index: true, null: false, default: ""
       t.string :uid, index: true, null: false, default: ""
     end
@@ -503,7 +348,7 @@ end
 ```ruby
 # spec/factories/social_profiles.rb
 FactoryGirl.define do
-  factory :social_profile do
+  factory :identity do
     user
     provider "facebook"
     uid "123545"
@@ -524,53 +369,23 @@ end
 require "rails_helper"
 
 feature "Connect social account" do
+  let!(:user) { create(:user, :from_auth_hashie) }
+
   context "oauth confirmed" do
     include_context :stub_omniauth
 
-    before { click_connect_fb }
-
-    context "user confirmed" do
-      let!(:user) { create(:user, :confirmed, :from_auth_hashie) }
-
-      scenario "User connects social account" do
-        expect(page).to have_connected_account("Facebook")
-      end
-    end
-
-    context "user not confirmed" do
-      let!(:user) { create(:user, :from_auth_hashie) }
-
-      scenario "User have to confirm own account" do
-        expect(page).to have_connected_account("Facebook")
-
-        open_email(user.email)
-
-        expect(current_email).to have_subject("Confirmation instructions")
-        expect(current_email).to have_body_text(user.full_name)
-      end
+    scenario "User connects social account" do
+      click_connect_fb
+      expect(page).to have_connected_account("Facebook")
     end
   end
 
   context "oauth not confirmed" do
     include_context :stub_not_verified_omniauth
 
-    before { click_connect_fb }
-
-    context "user confirmed" do
-      let!(:user) { create(:user, :confirmed, :from_auth_hashie) }
-
-      scenario "User connects social account" do
-        expect(page).to have_connected_account("Facebook")
-      end
-    end
-
-    context "user not confirmed" do
-      let!(:user) { create(:user, :from_auth_hashie) }
-
-      scenario "User sees alert" do
-        expect(page).to have_text("Please confirm your account before connecting your facebook account.")
-        expect(current_path).to eq(root_path)
-      end
+    scenario "User views alert message" do
+      click_connect_fb
+      expect(page).to have_text("Please confirm your Facebook account before continuing.")
     end
   end
 
@@ -583,7 +398,7 @@ end
 ```
 
 ```ruby
-# spec/features/visitor/sign_in_with_social_spec.rb
+# spec/features/visitor/sign_in_with_social_account_spec.rb
 require "rails_helper"
 
 feature "Sign in with social account" do
@@ -591,121 +406,87 @@ feature "Sign in with social account" do
     include_context :stub_omniauth
 
     context "when user found by uid" do
-      let!(:social_profile) { create(:social_profile, user: user) }
+      let!(:identity) { create(:identity, user: user) }
+      let(:user) { create(:user, :from_auth_hashie) }
 
-      before { click_sign_in_with_fb }
-
-      context "when user confirmed" do
-        let!(:user) { create(:user, :confirmed, :from_auth_hashie) }
-
-        it_behaves_like "success sign in"
-      end
-
-      context "when user not confirmed" do
-        let!(:user) { create(:user, :from_auth_hashie) }
-
-        it_behaves_like "finishing sign up" do
-          let(:name) { user.full_name }
-          let(:email) { "mailer@mail.com" }
-          let(:password) { "123456qwe" }
-        end
-      end
+      it_behaves_like "success sign in"
     end
 
     context "when user found by email" do
-      context "when user confirmed" do
-        let!(:user) { create(:user, :confirmed, :from_auth_hashie) }
+      let!(:user) { create(:user, :from_auth_hashie) }
 
-        before { click_sign_in_with_fb }
-
-        it_behaves_like "success sign in"
-      end
-
-      context "when user not confirmed" do
-        let!(:user) { create(:user, :from_auth_hashie) }
-
-        it_behaves_like "finishing sign up" do
-          let(:name) { user.full_name }
-          let(:email) { "mailer@mail.com" }
-          let(:password) { "123456qwe" }
-        end
-      end
+      it_behaves_like "success sign in"
     end
 
     context "when user not found" do
-      it_behaves_like "finishing sign up" do
-        let(:name) { "Joe Bloggs" }
-        let(:email) { "mailer@mail.com" }
-        let(:password) { "123456qwe" }
-      end
+      let(:user) { User.last }
+
+      it_behaves_like "success sign in"
     end
   end
 
   context "when oauth not confirmed" do
     include_context :stub_not_verified_omniauth
 
-    context "when user found by uid" do
-      let!(:social_profile) { create(:social_profile, user: user) }
-      let!(:user) { create(:user, :confirmed) }
+    scenario "Visitor sees alert message" do
+      visit new_user_session_path
+      click_link "Sign in with Facebook"
 
-      before { click_sign_in_with_fb }
-
-      it_behaves_like "success sign in"
+      expect(page).to have_text("Please confirm your Facebook account before continuing.")
     end
-
-    context "when user found by email" do
-      let!(:user) { create(:user, :confirmed, :from_auth_hashie) }
-
-      before { click_sign_in_with_fb }
-
-      scenario "User sees alert message" do
-        expect(page).to have_text("Please, connect your account from profile page.")
-        expect(current_path).to eq(root_path)
-      end
-    end
-
-    context "when user not found" do
-      it_behaves_like "finishing sign up" do
-        let(:name) { "Joe Bloggs" }
-        let(:email) { "mailer@mail.com" }
-        let(:password) { "123456qwe" }
-      end
-    end
-  end
-
-  def click_sign_in_with_fb
-    visit new_user_session_path
-    click_link "Sign in with Facebook"
   end
 end
 ```
 
 ```ruby
-# spec/interactors/connect_social_profile_spec.rb
+# spec/interactors/connect_identity_spec.rb
 require "rails_helper"
 
-describe ConnectSocialProfile do
+describe ConnectIdentity do
   include_context :auth_hashie
 
-  let(:user_1) { create(:user) }
-  let(:user_2) { create(:user) }
-  let(:service) { described_class.new(user_2, auth_hashie) }
+  let(:service) { described_class.new(user, auth_hashie) }
 
-  subject { service.call }
+  subject(:connect_social_account) { service.call }
 
-  context "when social_profile exists" do
-    let!(:social_profile) do
-      create(:social_profile, uid: auth_hashie.uid, provider: auth_hashie.provider, user: user_1)
+  context "when identity exists" do
+    let(:user) { create(:user) }
+    let(:user_2) { create(:user) }
+
+    let!(:identity) do
+      create(:identity, uid: auth_hashie.uid, provider: auth_hashie.provider, user: user_2)
     end
 
-    it "updates user record" do
-      expect { subject }.to change { social_profile.reload.user }.from(user_1).to(user_2)
+    it "updates user id" do
+      expect { connect_social_account }.to change { identity.reload.user }.from(user_2).to(user)
     end
   end
 
-  context "when social profile not exists" do
-    it "creates related social profile" do
-      expect { subject }.to change { user_2.social_profiles.count }.by(1)
+  context "when identity not exists" do
+    let(:user) { create(:user) }
+
+    it "creates related identity" do
+      expect { connect_social_account }.to change { user.identities.count }.by(1)
+    end
+  end
+
+  context "when user email matches with oauth email" do
+    let(:user) { create(:user, email: auth_hashie.info.email, confirmed_at: nil) }
+
+    it "confirms user" do
+      expect(user.confirmed?).to be_falsey
+      connect_social_account
+      expect(user.confirmed?).to be_truthy
+    end
+  end
+
+  context "when user email not matches with oauth email" do
+    let(:user) { create(:user, email: "not@matched.email", confirmed_at: nil) }
+
+    it "not confirms user" do
+      expect(user.confirmed?).to be_falsey
+      connect_social_account
+      expect(user.confirmed?).to be_falsey
     end
   end
 end
@@ -724,218 +505,93 @@ describe CreateUserFromAuth do
 
   subject { service.call }
 
-  it "creates new user from auth hash" do
+  it "creates new confirmed user from auth hash" do
     expect { subject }.to change { User.count }.by(1)
     expect(sent_emails).to eq(0)
     expect(user.email).to eq(auth_hashie.info.email)
     expect(user.full_name).to eq(auth_hashie.info.name)
+    expect(user.confirmed?).to be_truthy
   end
 end
 ```
 
 ```ruby
-# spec/interactors/find_user_by_email_service_spec.rb
+# spec/interactors/fetch_oauth_user_spec.rb
 require "rails_helper"
 
-describe FindUserByEmailService do
+describe FetchOauthUser do
   include_context :auth_hashie
 
   let(:service) { described_class.new(auth_hashie) }
 
-  subject { service.call }
+  subject(:fetched_user) { service.call }
+
+  context "when identity exists" do
+    let!(:identity) { create(:identity, uid: auth_hashie.uid, provider: auth_hashie.provider) }
+
+    it { is_expected.to eq(identity.user) }
+  end
+
+  context "when identity not exists" do
+    context "when user exists" do
+      let(:user) { build(:user) }
+
+      before do
+        allow(FindUserByEmail).to receive_message_chain(:new, :call).and_return(user)
+      end
+
+      it "fetches user by email" do
+        expect(FindUserByEmail).to receive_message_chain(:new, :call)
+        expect(fetched_user).to eq(user)
+      end
+    end
+
+    context "when user not exists" do
+      let(:user) { build(:user) }
+
+      before do
+        allow(CreateUserFromAuth).to receive_message_chain(:new, :call).and_return(user)
+      end
+
+      it "creates new one" do
+        expect(CreateUserFromAuth).to receive_message_chain(:new, :call)
+        expect(fetched_user).to eq(user)
+      end
+    end
+  end
+end
+```
+
+```ruby
+# spec/interactors/find_user_by_email_spec.rb
+require "rails_helper"
+
+describe FindUserByEmail do
+  include_context :auth_hashie
+
+  let(:service) { described_class.new(auth_hashie) }
+
+  subject(:find_user_by_email) { service.call }
 
   context "when user not exists" do
     it { is_expected.to be_nil }
   end
 
   context "when user exists" do
-    let!(:user) { create(:user, :from_auth_hashie) }
+    let!(:user) { create(:user, :from_auth_hashie, confirmed_at: nil) }
 
-    it "creates new social_profile" do
-      expect { subject }.to change { user.social_profiles.count }.by(1)
+    it "creates new identity" do
+      expect { find_user_by_email }.to change { user.identities.count }.by(1)
       expect(subject).to eq(user)
     end
-  end
-end
-```
 
-```ruby
-# spec/interactors/oauth_connect_organizer_spec.rb
-require "rails_helper"
-
-describe OauthConnectOrganizer do
-  include_context :auth_hashie
-
-  let(:service) { described_class.new(auth_hashie, user) }
-
-  subject { service.call }
-
-  context "when user confirmed" do
-    let(:user) { create(:user, :confirmed) }
-
-    before do
-      allow(ConnectSocialProfile).to receive_message_chain(:new, :call)
-      service.call
-    end
-
-    it "creates social profile" do
-      expect(ConnectSocialProfile).to have_received(:new).with(user, auth_hashie)
-    end
-  end
-
-  context "when user not confirmed" do
-    let(:user) { create(:user) }
-
-    context "when auth not verified" do
-      include_context :invalid_auth_hashie
-
-      it "raises error" do
-        expect { subject }.to raise_error(AuthVerificationPolicy::OauthError)
-      end
-    end
-
-    context "when auth verified" do
-      before do
-        allow(user).to receive(:confirm)
-        allow(user).to receive(:send_reset_password_instructions)
-        service.call
-      end
-
-      it "confirms user" do
-        expect(user).to have_received(:confirm)
-        expect(user).to have_received(:send_reset_password_instructions)
-      end
+    it "confirms user" do
+      expect(user.confirmed?).to be_falsey
+      find_user_by_email
+      expect(user.reload.confirmed?).to be_truthy
     end
   end
 end
-```
-
-```ruby
-# spec/interactors/unverified_auth_organizer_spec.rb
-require "rails_helper"
-
-describe UnverifiedAuthOrganizer do
-  include_context :auth_hashie
-
-  let(:service) { described_class.new(auth_hashie) }
-
-  subject { service.user }
-
-  context "when user found by email" do
-    before { create(:user, :from_auth_hashie) }
-
-    it "raises error" do
-      expect { subject }.to raise_error(AuthVerificationPolicy::OauthError)
-    end
-  end
-
-  context "when user found by uid" do
-    let!(:social_profile) { create(:social_profile, provider: auth_hashie.provider, uid: auth_hashie.uid, user: user) }
-
-    let(:emails) { ActionMailer::Base.deliveries }
-
-    context "when user confirmed" do
-      let!(:user) { create(:user, :confirmed, :from_auth_hashie) }
-
-      it "not sends confirmation notification" do
-        expect(emails).to be_empty
-      end
-    end
-
-    context "when user not confirmed" do
-      let!(:user) { create(:user, :from_auth_hashie) }
-      let(:email) { emails.last }
-
-      it "sends confirmation notification" do
-        expect(email.subject).to eq("Confirmation instructions")
-        expect(email.to).to eq([user.email])
-      end
-    end
-  end
-
-  context "when user not found" do
-    let(:user) { User.last }
-
-    it "creates new user from auth_hashie" do
-      expect { subject }.to change { User.count }.by(1)
-      expect(subject).to eq(user)
-    end
-  end
-end
-```
-
-```ruby
-# spec/interactors/verified_auth_organizer_spec.rb
-require "rails_helper"
-
-describe VerifiedAuthOrganizer do
-  include_context :auth_hashie
-
-  let(:service) { described_class.new(auth_hashie) }
-
-  subject { service.user }
-
-  context "when social profile exists" do
-    let!(:social_profile) { create(:social_profile, uid: auth_hashie.uid, provider: auth_hashie.provider) }
-
-    it { is_expected.to eq(social_profile.user) }
-  end
-
-  context "when social profile not exists" do
-    context "when user exists" do
-      let!(:user) { create(:user, :from_auth_hashie) }
-
-      it "creates related social profile" do
-        expect { subject }.to change { user.social_profiles.count }.by(1)
-        expect(subject).to eq(user)
-      end
-    end
-
-    context "when user not exists" do
-      it "creates new one" do
-        expect { subject }.to change { User.count }.by(1)
-      end
-    end
-  end
-end
-```
-
-```ruby
-# spec/models/social_profile_spec.rb
-require "rails_helper"
-
-describe SocialProfile do
-  subject { create(:social_profile, uid: "abc123") }
-
-  it { is_expected.to belong_to :user }
-  it { is_expected.to validate_presence_of :user }
-  it { is_expected.to validate_presence_of :uid }
-  it { is_expected.to validate_presence_of :provider }
-  it { is_expected.to validate_uniqueness_of(:uid).scoped_to(:provider) }
-
-  describe ".from_omniauth" do
-    include_context :auth_hashie
-
-    subject { described_class.from_omniauth(auth_hashie) }
-
-    context "when record exists" do
-      let!(:social_profile) { create(:social_profile, uid: auth_hashie.uid, provider: auth_hashie.provider) }
-
-      it { is_expected.to eq(social_profile) }
-    end
-
-    context "when record not exists" do
-      it { is_expected.to be_nil }
-    end
-  end
-end
-```
-
-```ruby
-# spec/models/user_spec.rb
-...
-it { is_expected.to have_many(:social_profiles).dependent(:destroy) }
-...
 ```
 
 ```ruby
@@ -973,12 +629,12 @@ describe AuthVerificationPolicy do
       end
     end
 
-    context "when provider is not in the case statement" do
+    context "when provider checking is not defined" do
       let(:provider) { "another" }
 
       it "raises Exception" do
         expect { subject }
-          .to raise_error(ArgumentError, I18n.t("omniauth.verification.not_implemented", kind: provider))
+          .to raise_error(AuthVerificationPolicy::OauthError, I18n.t("omniauth.verification.not_implemented", kind: provider))
       end
     end
   end
@@ -994,38 +650,11 @@ OmniAuth.config.test_mode = true
 
 ```ruby
 # spec/support/matchers/have_connected_account.rb
-RSpec::Matchers.define :have_connected_account do |social_profile|
+RSpec::Matchers.define :have_connected_account do |identity|
   match do
-    within ".js-social-profiles" do
-      have_text(social_profile)
+    within ".js-identities" do
+      have_text(identity)
     end
-  end
-end
-```
-
-```ruby
-# spec/support/shared_examples/finishing_sign_up.rb
-shared_examples_for "finishing sign up" do
-  before do
-    visit new_user_session_path
-    click_link "Sign in with Facebook"
-  end
-
-  scenario "User finishing registration" do
-    expect(page).to have_text("Finish Signup")
-
-    fill_in :user_email, with: email
-    fill_in :user_password, with: password
-    click_button "Finish Signup"
-
-    open_email(email)
-    expect(current_email).to have_subject("Confirmation instructions")
-    expect(current_email).to have_body_text(name)
-
-    visit_in_email("Confirm my account")
-    expect(page).to have_content("Your email address has been successfully confirmed")
-    expect(page).to have_text(name)
-    expect(page).to have_text(email)
   end
 end
 ```
@@ -1050,28 +679,6 @@ shared_context :auth_hashie do
           name: "Joe Bloggs",
           verified: true,
           email_verified: true
-        }
-      }
-    )
-  end
-end
-
-shared_context :invalid_auth_hashie do
-  let(:auth_hashie) do
-    OmniAuth::AuthHash.new(
-      provider: "facebook",
-      uid: "123545",
-      info: {
-        email: "joe@bloggs.com",
-        name: "Joe Bloggs",
-        verified: false
-      },
-      extra: {
-        raw_info: {
-          email: "joe@bloggs.com",
-          name: "Joe Bloggs",
-          verified: false,
-          email_verified: false
         }
       }
     )
@@ -1127,13 +734,14 @@ end
 # spec/support/shared_examples/success_sign_in.rb
 shared_examples_for "success sign in" do
   scenario "User signs in" do
+    visit new_user_session_path
+    click_link "Sign in with Facebook"
+
     expect(page).to have_text(user.full_name)
-    expect(current_path).to eq(edit_user_registration_path)
-    expect(page).to have_connected_account("Facebook")
+    expect(current_path).to eq(root_path)
   end
 end
 ```
-
 ---
 
 ## To add new provider you have to do:
