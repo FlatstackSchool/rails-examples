@@ -12,6 +12,22 @@ gem "omniauth-google-oauth2"
 ```
 
 ```ruby
+# app/controllers/identities_controller.rb
+class IdentitiesController < ApplicationController
+  before_action :authenticate_user!
+
+  expose(:identities) { current_user.identities }
+  expose(:identity)
+
+  def destroy
+    action = indentity.destroy ? :notice : :alert
+    flash[action] = t "flash.actions.destroy.#{action}", resource_name: Identity.model_name.human
+    redirect_to edit_user_registration_url
+  end
+end
+```
+
+```ruby
 # app/controllers/omniauth_callbacks_controller.rb
 class OmniauthCallbacksController < Devise::OmniauthCallbacksController
   include OmniauthHelper
@@ -55,31 +71,6 @@ end
 module OmniauthHelper
   def provider_name(provider)
     t "active_record.attributes.identity.provider_name.#{provider}"
-  end
-end
-```
-
-```ruby
-# app/controllers/identities_controller.rb
-class IdentitiesController < ApplicationController
-  before_action :authenticate_user!
-
-  expose(:identities) { current_user.identities }
-  expose(:identity)
-
-  def destroy
-    if identity.destroy
-      flash[:notice] = t "flash.actions.destroy.notice", resource_name: resource_name
-    else
-      flash[:alert] = t "flash.actions.destroy.alert", resource_name: resource_name
-    end
-    redirect_to edit_user_registration_url
-  end
-
-  private
-
-  def resource_name
-    Identity.model_name.human
   end
 end
 ```
@@ -172,7 +163,7 @@ class FetchOauthUser
   private
 
   def user_found_by_uid
-    Identity.from_omniauth(auth).try(:user)
+    Identity.from_omniauth(auth)&.user
   end
 
   def user_found_by_email
@@ -443,8 +434,6 @@ end
 require "rails_helper"
 
 describe ConnectIdentity do
-  include_context :auth_hashie
-
   let(:service) { described_class.new(user, auth_hashie) }
 
   subject(:connect_social_account) { service.call }
@@ -497,8 +486,6 @@ end
 require "rails_helper"
 
 describe CreateUserFromAuth do
-  include_context :auth_hashie
-
   let(:user) { User.last }
   let(:service) { described_class.new(auth_hashie) }
   let(:sent_emails) { ActionMailer::Base.deliveries.count }
@@ -520,8 +507,6 @@ end
 require "rails_helper"
 
 describe FetchOauthUser do
-  include_context :auth_hashie
-
   let(:service) { described_class.new(auth_hashie) }
 
   subject(:fetched_user) { service.call }
@@ -567,8 +552,6 @@ end
 require "rails_helper"
 
 describe FindUserByEmail do
-  include_context :auth_hashie
-
   let(:service) { described_class.new(auth_hashie) }
 
   subject(:find_user_by_email) { service.call }
@@ -591,6 +574,35 @@ describe FindUserByEmail do
       expect(user.reload.confirmed?).to be_truthy
     end
   end
+end
+```
+
+```ruby
+# spec/support/helpers/omniauth_helpers.rb
+module OmniauthHelpers
+  def auth_hashie(verified: true)
+    OmniAuth::AuthHash.new(
+      provider: "facebook",
+      uid: "123545",
+      info: {
+        email: "joe@bloggs.com",
+        name: "Joe Bloggs",
+        verified: verified
+      },
+      extra: {
+        raw_info: {
+          email: "joe@bloggs.com",
+          name: "Joe Bloggs",
+          verified: verified,
+          email_verified: verified
+        }
+      }
+    )
+  end
+end
+
+RSpec.configure do |config|
+  config.include OmniauthHelpers
 end
 ```
 
@@ -663,69 +675,15 @@ end
 # spec/support/shared_examples/omniauth_stub.rb
 require "rails_helper"
 
-shared_context :auth_hashie do
-  let(:auth_hashie) do
-    OmniAuth::AuthHash.new(
-      provider: "facebook",
-      uid: "123545",
-      info: {
-        email: "joe@bloggs.com",
-        name: "Joe Bloggs",
-        verified: true
-      },
-      extra: {
-        raw_info: {
-          email: "joe@bloggs.com",
-          name: "Joe Bloggs",
-          verified: true,
-          email_verified: true
-        }
-      }
-    )
-  end
-end
-
 shared_context :stub_omniauth do
   background do
-    OmniAuth.config.mock_auth[:facebook] = OmniAuth::AuthHash.new(
-      provider: "facebook",
-      uid: "123545",
-      info: {
-        email: "joe@bloggs.com",
-        name: "Joe Bloggs",
-        verified: true
-      },
-      extra: {
-        raw_info: {
-          email: "joe@bloggs.com",
-          name: "Joe Bloggs",
-          verified: true,
-          email_verified: true
-        }
-      }
-    )
+    OmniAuth.config.mock_auth[:facebook] = auth_hashie
   end
 end
 
 shared_context :stub_not_verified_omniauth do
   background do
-    OmniAuth.config.mock_auth[:facebook] = OmniAuth::AuthHash.new(
-      provider: "facebook",
-      uid: "123545",
-      info: {
-        email: "joe@bloggs.com",
-        name: "Joe Bloggs",
-        verified: false
-      },
-      extra: {
-        raw_info: {
-          email: "joe@bloggs.com",
-          name: "Joe Bloggs",
-          verified: false,
-          email_verified: false
-        }
-      }
-    )
+    OmniAuth.config.mock_auth[:facebook] = auth_hashie(verified: false)
   end
 end
 ```
