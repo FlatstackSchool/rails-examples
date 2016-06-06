@@ -33,7 +33,7 @@ class OmniauthCallbacksController < Devise::OmniauthCallbacksController
   include OmniauthHelper
 
   Identity::PROVIDERS.each do |provider|
-    define_method(provider.to_s) do
+    define_method(provider) do
       show_verification_notice and return unless auth_verified?
 
       current_user ? connect_identity : process_sign_in
@@ -269,15 +269,20 @@ end
   b Successfully authorized via:
   ul.js-identities
     - identities.each do |identity|
-      li = link_to "#{provider_name(identity.provider)} (#{identity.uid.truncate(9)}). Unauthorize?",
-                   identity,
-                   data: { confirm: "Are you sure you want to remove this identity?" },
-                   method: :delete,
-                   class: "js-unauthorize"
+      li = render "identities/provider_link", identity: identity
 b Add service to sign in with:
 ul
   - Identity::PROVIDERS.each do |provider|
     li = link_to provider_name(provider), user_omniauth_authorize_path(provider)
+```
+
+```ruby
+# app/views/identities/_provider_link.html.slim
+= link_to "#{provider_name(identity.provider)} (#{identity.uid.truncate(9)}). Unauthorize?",
+          identity,
+          data: { confirm: "Are you sure you want to remove this identity?" },
+          method: :delete,
+          class: "js-unauthorize"
 ```
 
 ```ruby
