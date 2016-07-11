@@ -44,7 +44,7 @@ end
 ```
 
 ```ruby
-# app/views/feedbacks/new.html.erb
+# app/views/feedbacks/new.html.slim
 - title("Contact Us")
 - description("Contact the team")
 - keywords("Contact, Email, Touch, Getting in touch")
@@ -87,7 +87,7 @@ end
 ```
 
 ```ruby
-# app/views/application_mailer/feedback.html.erb
+# app/views/application_mailer/feedback.html.slim
 p
   | Hello, here is feedback from #{@feedback.name} (#{@feedback.email} #{@feedback.phone})
 
@@ -154,7 +154,7 @@ feature "Create Feedback." do
     fill_form :feedback, feedback_attributes
     click_button "Submit"
 
-    open_email(ENV.fetch("FEADBACK_EMAIL"))
+    open_email(ENV.fetch("FEEDBACK_EMAIL"))
 
     expect(current_email).to have_subject("Feedback")
     expect(current_email).to be_delivered_from(feedback_attributes[:email])
