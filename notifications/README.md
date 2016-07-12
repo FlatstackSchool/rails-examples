@@ -20,18 +20,17 @@ end
 class NotifyUserViaEmail
   include Interactor
 
+  delegate :feedback, to: :context
+  delegate :email, to: feedback.employee
+
   def call
     ApplicationMailer.feedback_notification(email, message.content_for(:email)).deliver_later
   end
 
   private
 
-  def email
-    context.feedback.employee.email
-  end
-
   def message
-    FeedbackNotification.new(context.feedback)
+    FeedbackNotification.new(feedback)
   end
 end
 
@@ -47,18 +46,17 @@ class NotifyUserViaHipchat
     end
   end
 
+  delegate :feedback, to: :context
+  delegate :email, to: feedback.employee
+
   def call
     Job.perform_later(email, message.content_for(:hipchat))
   end
 
   private
 
-  def email
-    context.feedback.employee.email
-  end
-
   def message
-    FeedbackNotification.new(context.feedback)
+    FeedbackNotification.new(feedback)
   end
 end
 ```
