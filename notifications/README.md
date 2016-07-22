@@ -162,6 +162,16 @@ class ApplicationMailer < ActionMailer::Base
     )
   end
 end
+
+# config/application.rb
+module YourApp
+  class Application < Rails::Application
+    # Be sure to have the adapter's gem in your Gemfile
+    # and follow the adapter's specific installation
+    # and deployment instructions.
+    config.active_job.queue_adapter = :sidekiq
+  end
+end
 ```
 
 ```ruby
@@ -171,3 +181,4 @@ gem "interactor"
 gem "render_anywhere"
 gem "sidekiq"
 ```
+
