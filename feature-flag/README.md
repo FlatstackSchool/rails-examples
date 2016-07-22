@@ -117,5 +117,10 @@ module Featurization
     Feature.enabled?(feature, user)
   end
 end
+
+# app/controllers/application_controller.rb
+class ApplicationController < ActionController::Base
+  include Featurization
+end
 ```
 
