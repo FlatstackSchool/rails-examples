@@ -9,7 +9,7 @@ require "flipper/adapters/memory"
 
 Feature.configure do |config|
   config.flipper = Flipper.new(Flipper::Adapters::Memory.new)
-  config.dev_mode = ENV["FEATURE_DEV_MODE"].present?
+  config.dev_mode = ENV["FEATURE_DEV_MODE"].present? # all features considered enabled
 end
 ```
 
