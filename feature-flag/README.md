@@ -25,6 +25,21 @@ end
 # Gemfile
 gem "flipper"
 
+# app/models/user.rb
+class User < ActiveRecord::Base
+  def flipper_id
+    "User:#{id}"
+  end
+end
+
+# db/migrate/XXX_add_tester_to_users.rb
+class AddTesterFlagToUsers < ActiveRecord::Migration
+  def change
+    add_column :users, :tester, :boolean, default: false, null: false, index: true
+  end
+end
+
+
 # app/models/feature.rb
 class Feature
   cattr_accessor :dev_mode
