@@ -59,8 +59,12 @@ class Feature
   end
 
   def enabled?(user)
-    return true if dev_mode == true
+    return true if dev_mode?
     flipper[feature].enabled?(user.to_model)
+  end
+
+  def dev_mode?
+    !! dev_mode
   end
 
   def self.enabled?(feature, user)
