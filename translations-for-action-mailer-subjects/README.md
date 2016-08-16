@@ -1,4 +1,4 @@
-# Translation for Action Mailer trought locales
+# Translations for Action Mailer E-Mail Subjects trought locales
 If you don't pass a subject to the mail method, Action Mailer will try to find it in your translations.
 The performed lookup will use the pattern ``<mailer_scope>.<action_name>.subject`` to construct the key.
 
