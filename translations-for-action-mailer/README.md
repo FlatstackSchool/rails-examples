@@ -27,7 +27,7 @@ en:
 
 ```
 
-```ruby
+```slim
 # views/application_mailer/send_weekly_report_notifier.html.slim
 
 h1 Hi, #{@manager.full_name}! There is some job for you!
