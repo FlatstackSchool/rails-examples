@@ -3,4 +3,4 @@
 * [Feedback form](feedback-form)
 * [Markdown preview](markdown-preview)
 * [Image upload with preview](image-upload-with-preview)
-* [Translations for Action Mailer](translations-for-action-mailer)
+* [Translation for Action Mailer trought locales](translations-for-action-mailer)
