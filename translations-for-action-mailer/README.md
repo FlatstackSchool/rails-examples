@@ -4,7 +4,7 @@ The performed lookup will use the pattern ``<mailer_scope>.<action_name>.subject
 
 
 ```ruby
-#mailers/application_mailer.rb
+# mailers/application_mailer.rb
 
 class ApplicationMailer < ActionMailer::Base
   def send_weekly_report_notifier(manager, projects)
@@ -17,7 +17,7 @@ end
 
 ```
 
-```ruby
+```yml
 # config/locales/mailers.en.yml
 
 en:
@@ -28,7 +28,7 @@ en:
 ```
 
 ```ruby
-#views/application_mailer/send_weekly_report_notifier.html.slim
+# views/application_mailer/send_weekly_report_notifier.html.slim
 
 h1 Hi, #{@manager.full_name}! There is some job for you!
 
@@ -45,7 +45,7 @@ ul
 If you want to send parameters to interpolation use the default_i18n_subject method on the mailer.
 
 ```ruby
-#mailers/application_mailer.rb
+# mailers/application_mailer.rb
 
 class ApplicationMailer < ActionMailer::Base
   def send_weekly_report_notifier(manager, projects)
@@ -58,7 +58,7 @@ end
 
 ```
 
-```ruby
+```yml
 # config/locales/mailers.en.yml
 
 en:
